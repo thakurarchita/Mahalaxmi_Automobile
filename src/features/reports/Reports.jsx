@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { CalendarDays, ChartNoAxesColumnIncreasing, Download, Printer, Store } from 'lucide-react'
-import { money } from '../../utils/format'
+import { CalendarDays, ChartNoAxesColumnIncreasing, Download, FileSpreadsheet, Printer, Store, Text } from 'lucide-react'
+import { dateLabel, money } from '../../utils/format'
 
 const periods = [
   { id: 'daily', label: 'Daily' },
@@ -86,6 +86,27 @@ function downloadCsv(filename, headers, rows) {
   window.setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.append(anchor)
+  anchor.click()
+  anchor.remove()
+  window.setTimeout(() => URL.revokeObjectURL(url), 0)
+}
+
+function excelDate(value) {
+  if (!value) return ''
+  const [year, month, day] = value.slice(0, 10).split('-').map(Number)
+  return (Date.UTC(year, month - 1, day) - Date.UTC(1899, 11, 30)) / 86_400_000
+}
+
+function pdfMoney(value) {
+  return `INR ${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
 function ReportCard({ label, value, note, negative = false, count = false }) {
   return <section className="panel report-card">
     <span className="label">{label}</span>
@@ -97,6 +118,7 @@ function ReportCard({ label, value, note, negative = false, count = false }) {
 export default function Reports({ invoices = [], purchases = [], suppliers = [], onGo }) {
   const [period, setPeriod] = useState('monthly')
   const [supplierId, setSupplierId] = useState('all')
+  const [exportError, setExportError] = useState('')
   const rows = useMemo(() => {
     if (period === 'supplier') return []
     const transactions = [...invoices.map((row) => ({ ...row, kind: 'sale', date: row.invoice_date })),
@@ -165,15 +187,9 @@ export default function Reports({ invoices = [], purchases = [], suppliers = [],
           : 'All dates · all records'
 
   function downloadReport() {
-    if (period === 'supplier') {
-      downloadCsv('supplier-purchases-report.csv',
-        ['Supplier', 'Bills', 'Total purchases', 'Paid', 'Balance due'],
-        supplierRows.map((row) => [row.name, row.bills, Number(row.total.toFixed(2)), Number(row.paid.toFixed(2)), Number((row.total - row.paid).toFixed(2))]))
-      return
-    }
-    downloadCsv(`${period}-business-report.csv`,
-      ['Type', 'Reference', 'Date', 'Customer / supplier', 'Taxable amount', 'Total', 'Paid', 'Balance due', 'Part cost', 'Gross profit', 'Status'],
-      [...rows].sort((a, b) => b.date.localeCompare(a.date)).map((row) => {
+    const exportRows = period === 'supplier'
+      ? supplierRows.map((row) => [row.name, row.bills, Number(row.total.toFixed(2)), Number(row.paid.toFixed(2)), Number((row.total - row.paid).toFixed(2))])
+      : [...rows].sort((a, b) => b.date.localeCompare(a.date)).map((row) => {
         const isSale = row.kind === 'sale'
         const taxable = Number(row.taxable_amount || 0)
         const cost = Number(row.cost_of_goods || 0)
@@ -192,7 +208,146 @@ export default function Reports({ invoices = [], purchases = [], suppliers = [],
           isSale ? Number((taxable - cost).toFixed(2)) : '',
           row.status,
         ]
-      }))
+      })
+    const exportHeaders = period === 'supplier'
+      ? ['Supplier', 'Bills', 'Total purchases', 'Paid', 'Balance due']
+      : ['Type', 'Reference', 'Date', 'Customer / supplier', 'Taxable amount', 'Total', 'Paid', 'Balance due', 'Part cost', 'Gross profit', 'Status']
+    downloadCsv(`${period}-business-report.csv`, exportHeaders, exportRows)
+  }
+
+  async function downloadExcel() {
+    setExportError('')
+    try {
+    const { buildWorkbook } = await import('./excelExport')
+    const periodLabel = periods.find((option) => option.id === period)?.label || 'Business'
+    const reportRows = period === 'supplier'
+      ? supplierRows.map((row) => [row.name, row.bills, row.total, row.paid, row.total - row.paid])
+      : [...rows].sort((a, b) => b.date.localeCompare(a.date)).map((row) => {
+        const isSale = row.kind === 'sale'
+        const taxable = Number(row.taxable_amount || 0)
+        const cost = Number(row.cost_of_goods || 0)
+        const total = Number(row.total || 0)
+        const paid = Number(row.paid_amount || 0)
+        return [
+          isSale ? 'Sale' : 'Purchase',
+          isSale ? row.invoice_number : row.purchase_number,
+          excelDate(row.date),
+          isSale ? row.customer_name : row.supplier_name,
+          taxable,
+          total,
+          paid,
+          total - paid,
+          isSale ? cost : '',
+          isSale ? taxable - cost : '',
+          row.status,
+        ]
+      })
+    const headers = period === 'supplier'
+      ? ['Supplier', 'Bills', 'Total purchases', 'Paid', 'Balance due']
+      : ['Type', 'Reference', 'Date', 'Customer / supplier', 'Taxable amount', 'Total', 'Paid', 'Balance due', 'Part cost', 'Gross profit', 'Status']
+    const summaryRows = period === 'supplier'
+      ? [
+        ['Mahalaxmi Automobiles — Supplier Purchase Report'],
+        ['Supplier filter', supplierId === 'all' ? 'All suppliers' : suppliers.find((item) => String(item.id) === supplierId)?.name || 'Selected supplier'],
+        ['Total purchases', supplierRows.reduce((sum, row) => sum + row.total, 0)],
+        ['Supplier count', supplierRows.filter((row) => row.bills > 0).length],
+        ['Bills recorded', supplierRows.reduce((sum, row) => sum + row.bills, 0)],
+        ['Balance due', supplierRows.reduce((sum, row) => sum + row.total - row.paid, 0)],
+        [],
+      ]
+      : [
+        ['Mahalaxmi Automobiles — Business Report'],
+        ['Report view', periodLabel],
+        ['Date range', summaryText],
+        [],
+        ['Metric', 'Amount'],
+        ['Sales before GST', totals.sales],
+        ['Part costs', totals.cost],
+        ['Gross profit / (loss)', totals.sales - totals.cost],
+        ['Purchases including GST', totals.purchases],
+        ['Customer balances due', totals.receivables],
+        [],
+      ]
+    const headerRow = summaryRows.length + 1
+    const workbook = buildWorkbook([{
+      name: 'Business report',
+      rows: [...summaryRows, headers, ...reportRows],
+      widths: period === 'supplier' ? [34, 14, 22, 22, 22] : [14, 22, 17, 34, 20, 20, 20, 20, 20, 20, 16],
+      options: {
+        headerRow,
+        dateColumns: period === 'supplier' ? [] : [2],
+        currencyColumns: period === 'supplier' ? [2, 3, 4] : [1, 4, 5, 6, 7, 8, 9],
+        titleRows: [1],
+      },
+    }])
+    downloadBlob(`${period}-business-report.xlsx`, new Blob([workbook], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }))
+    } catch (cause) {
+      setExportError(`Could not create the Excel report: ${cause.message}`)
+    }
+  }
+
+  async function downloadPdf() {
+    setExportError('')
+    try {
+    const [{ jsPDF }, { default: autoTable }] = await Promise.all([
+      import('jspdf'),
+      import('jspdf-autotable'),
+    ])
+    const periodLabel = periods.find((option) => option.id === period)?.label || 'Business'
+    const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a3' })
+    pdf.setFontSize(17)
+    pdf.text('Mahalaxmi Automobiles — Business Report', 15, 16)
+    pdf.setFontSize(10)
+    pdf.text(`${periodLabel} · ${period === 'supplier' ? 'All recorded purchases' : summaryText}`, 15, 23)
+    const body = period === 'supplier'
+      ? supplierRows.map((row) => [row.name, String(row.bills), pdfMoney(row.total), pdfMoney(row.paid), pdfMoney(row.total - row.paid)])
+      : [...rows].sort((a, b) => b.date.localeCompare(a.date)).map((row) => {
+        const isSale = row.kind === 'sale'
+        const taxable = Number(row.taxable_amount || 0)
+        const cost = Number(row.cost_of_goods || 0)
+        const total = Number(row.total || 0)
+        const paid = Number(row.paid_amount || 0)
+        return [
+          isSale ? 'Sale' : 'Purchase',
+          isSale ? row.invoice_number : row.purchase_number,
+          dateLabel(row.date),
+          isSale ? row.customer_name : row.supplier_name,
+          pdfMoney(taxable),
+          pdfMoney(total),
+          pdfMoney(paid),
+          pdfMoney(total - paid),
+          isSale ? pdfMoney(cost) : '—',
+          isSale ? pdfMoney(taxable - cost) : '—',
+          row.status,
+        ]
+      })
+    const headers = period === 'supplier'
+      ? ['Supplier', 'Bills', 'Total purchases', 'Paid', 'Balance due']
+      : ['Type', 'Reference', 'Date', 'Customer / supplier', 'Taxable', 'Total', 'Paid', 'Balance due', 'Part cost', 'Gross profit', 'Status']
+    const totalsLine = period === 'supplier'
+      ? `Total purchases ${pdfMoney(supplierRows.reduce((sum, row) => sum + row.total, 0))} · Balance due ${pdfMoney(supplierRows.reduce((sum, row) => sum + row.total - row.paid, 0))}`
+      : `Sales ${pdfMoney(totals.sales)} · Part costs ${pdfMoney(totals.cost)} · Gross profit ${pdfMoney(totals.sales - totals.cost)} · Purchases ${pdfMoney(totals.purchases)}`
+    pdf.text(totalsLine, 15, 30)
+    autoTable(pdf, {
+      head: [headers],
+      body,
+      startY: 36,
+      margin: { left: 15, right: 15 },
+      styles: { fontSize: 8, cellPadding: 2, overflow: 'linebreak' },
+      headStyles: { fillColor: [173, 36, 40] },
+      columnStyles: period === 'supplier' ? { 0: { cellWidth: 85 } } : {
+        0: { cellWidth: 20 },
+        1: { cellWidth: 32 },
+        2: { cellWidth: 28 },
+        3: { cellWidth: 60 },
+      },
+    })
+    pdf.save(`${period}-business-report.pdf`)
+    } catch (cause) {
+      setExportError(`Could not create the PDF report: ${cause.message}`)
+    }
   }
 
   function printReport() {
@@ -202,11 +357,12 @@ export default function Reports({ invoices = [], purchases = [], suppliers = [],
   }
 
   return <div className="reports-page">
+    {exportError && <div className="alert error" role="alert">{exportError}</div>}
     <section className="panel reports-intro">
       <div className="reports-intro-icon"><ChartNoAxesColumnIncreasing size={21} /></div>
       <div><h2>Business reports</h2><p>See how sales and purchases are changing over time, or compare what you buy from each supplier.</p></div>
       <span className="reports-range"><CalendarDays size={14} />{period === 'supplier' ? 'All recorded purchases' : summaryText}</span>
-      <div className="reports-actions"><button type="button" className="btn btn-small" onClick={printReport}><Printer size={14} />Print</button><button type="button" className="btn btn-small solid" onClick={downloadReport}><Download size={14} />Download CSV</button></div>
+      <div className="reports-actions"><button type="button" className="btn btn-small" onClick={printReport}><Printer size={14} />Print</button><button type="button" className="btn btn-small" onClick={downloadReport}><Text size={14} />CSV</button><button type="button" className="btn btn-small" onClick={downloadExcel}><FileSpreadsheet size={14} />Excel</button><button type="button" className="btn btn-small solid" onClick={downloadPdf}><Download size={14} />PDF</button></div>
     </section>
 
     <nav className="report-tabs" aria-label="Choose report view">
@@ -255,7 +411,7 @@ export default function Reports({ invoices = [], purchases = [], suppliers = [],
             return <tr key={`${row.kind}-${row.id}`}>
               <td>{isSale ? 'Sale' : 'Purchase'}</td>
               <td><b>{isSale ? row.invoice_number : row.purchase_number}</b></td>
-              <td>{groupLabel(row.date, 'daily')}</td>
+              <td>{dateLabel(row.date)}</td>
               <td>{isSale ? row.customer_name : row.supplier_name}</td>
               <td className="r">{money(row.total)}</td><td className="r">{money(row.paid_amount)}</td>
               <td className="r">{money(Number(row.total || 0) - Number(row.paid_amount || 0))}</td><td>{row.status}</td>
