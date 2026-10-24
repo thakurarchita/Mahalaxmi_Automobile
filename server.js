@@ -1,5 +1,6 @@
 import express from 'express'
-import { db, databasePath } from './server/database.js'
+import path from 'node:path'
+import { db, databasePath, projectRoot } from './server/database.js'
 import { registerAuthRoutes } from './server/auth.js'
 
 const app = express()
@@ -751,6 +752,15 @@ app.use((error, _req, res, _next) => {
 })
 
 app.use('/api', (_req, res) => res.status(404).json({ error: 'API route not found.' }))
+
+const staticDirectory = path.join(projectRoot, 'dist')
+app.use(express.static(staticDirectory, { index: false }))
+app.get('*', (req, res, next) => {
+  if (!req.accepts('html')) return next()
+  res.sendFile(path.join(staticDirectory, 'index.html'), (error) => {
+    if (error) next(error)
+  })
+})
 
 const port = Number(process.env.PORT || 3001)
 const host = process.env.HOST || '127.0.0.1'

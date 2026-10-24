@@ -15,6 +15,18 @@ The API uses an HTTP-only, same-site owner session cookie and expires sessions a
 
 Password recovery sends a one-time code to the owner recovery email saved in **Settings**; codes are never printed in the terminal. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `SMTP_FROM` as environment variables in the deployment platform. `SMTP_SECURE=true` enables secure SMTP (it is enabled automatically on port 465). Set a valid owner email in Settings and configure SMTP before deploying. Codes expire after 10 minutes.
 
+## Online setup for a small business
+
+The included `render.yaml` prepares a private Node.js web service with a persistent disk for the SQLite business database. The persistent disk requires a paid Render service; do not switch a live business to free hosting that can sleep or discard local files.
+
+1. Create a Render account, choose **New → Blueprint**, and connect `thakurarchita/Mahalaxmi_Automobile`.
+2. Review the service and persistent disk in `render.yaml`. Complete the `SMTP_USER` and `SMTP_PASS` prompts with the Gmail sender account and its Google App Password. Do not use your normal Gmail password or put secrets in GitHub.
+3. In Google Account security, enable 2-Step Verification and create an App Password for the app. If Google Workspace does not allow App Passwords, use an approved SMTP sender instead.
+4. After deployment, open the Render-provided HTTPS website and complete owner setup. In **Settings**, save the email address where password recovery codes should be received. The `SMTP_USER` address sends the email; the Settings email receives it.
+5. Test login, request a recovery code, and confirm it arrives before relying on recovery.
+
+The hosted database starts separately from the SQLite file on your computer. If your local database already contains real business records, do not start using the hosted app until those records have been backed up and securely transferred to its persistent disk. Never upload the SQLite file to this public GitHub repository. Keep a separate backup of the hosted database.
+
 ## First use
 
 Add customers and suppliers, then add parts with their HSN/SAC, cost, sale price, GST rate and opening stock. Select a customer and parts on a new invoice; the part's description, HSN, GST and sale price are filled from inventory. Invoice creation checks stock and GSTIN/place of supply, calculates CGST + SGST for Maharashtra or IGST for other states, saves the invoice and reduces stock in one database transaction.
