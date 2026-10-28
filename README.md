@@ -27,6 +27,21 @@ The included `render.yaml` prepares a private Node.js web service with a persist
 
 The hosted database starts separately from the SQLite file on your computer. If your local database already contains real business records, do not start using the hosted app until those records have been backed up and securely transferred to its persistent disk. Never upload the SQLite file to this public GitHub repository. Keep a separate backup of the hosted database.
 
+## Deploy on Railway
+
+`railway.json` configures the Node.js build, production start command and health check. Railway does not configure the SQLite volume in this file; create one in the Railway service settings so business data survives redeploys and service restarts.
+
+1. Push this project to GitHub, then in Railway choose **New Project → Deploy from GitHub Repo** and select the repository. If Railway asks for a service root directory, use `.` (the repository root containing `package.json`).
+2. In the service's **Variables**, set `HOST=0.0.0.0` and `DATABASE_PATH=/data/mahalaxmi-automobiles.sqlite`.
+3. In the service's **Volumes**, create and attach a persistent volume mounted at `/data`. Do not deploy with the database path on the temporary filesystem.
+4. For password recovery email, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and optionally `SMTP_FROM`. Store credentials as Railway variables, never in Git. For Gmail, use an App Password, not your normal account password.
+5. Before starting the app with real business data, create a consistent SQLite backup from the project folder with `npm run backup:database`. It writes `data/railway-import.sqlite` and checks its integrity; it can safely include committed data still in SQLite's write-ahead log.
+6. Install and log in to the Railway CLI, then use Railway's volume file tools to upload the backup to the `/data` volume as `mahalaxmi-automobiles.sqlite`. If the app has already started and created an empty database, stop it first and remove that empty database and its `-wal`/`-shm` sidecar files before replacing it. Never overwrite a database while the app is running.
+7. Generate a public domain in Railway's **Networking** settings. Open the HTTPS URL, confirm the owner account and records are present, save a recovery email in **Settings**, and test login and password recovery.
+8. If the service should only be available for three weeks, set a calendar reminder to remove it afterward and review Railway's current service and persistent-volume charges. Deleting the volume permanently deletes the hosted SQLite database; export and securely save any records you need before removing it.
+
+The Railway database is separate from the SQLite file on your computer. If the local database contains real business records, back it up and plan a secure transfer before using the hosted service for real sales. Keep an independent backup of the hosted database.
+
 ## First use
 
 Add customers and suppliers, then add parts with their HSN/SAC, cost, sale price, GST rate and opening stock. Select a customer and parts on a new invoice; the part's description, HSN, GST and sale price are filled from inventory. Invoice creation checks stock and GSTIN/place of supply, calculates CGST + SGST for Maharashtra or IGST for other states, saves the invoice and reduces stock in one database transaction.
