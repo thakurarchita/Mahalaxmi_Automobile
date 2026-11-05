@@ -891,7 +891,9 @@ app.get('*', (req, res, next) => {
 })
 
 const port = Number(process.env.PORT || 3001)
-const host = process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1')
+const configuredHost = process.env.HOST?.trim()
+const host = configuredHost === '[::]' ? '0.0.0.0'
+  : configuredHost || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1')
 app.listen(port, host, () => {
   console.log(`Mahalaxmi Automobiles API listening on http://${host}:${port}`)
   console.log(`SQLite database: ${databasePath}`)
