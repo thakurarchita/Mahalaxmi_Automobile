@@ -11,7 +11,7 @@ A small internal sales and inventory application for Mahalaxmi Automobiles. It s
 5. On first use, create the owner account and choose a password of at least 12 characters.
 
 The Vite development server forwards `/api` requests to the backend on port 3001. Keep the API process running while using the app. Set `PORT` to change the API port. In production, the API binds to `0.0.0.0` by default so hosted health checks can reach it; set `HOST` explicitly when a platform requires a different interface.
-The API uses an HTTP-only, same-site owner session cookie and expires sessions after 8 hours. It listens only on `127.0.0.1` by default. For a deployment, configure the host's port and set `HOST=0.0.0.0` when the platform requires the application to bind to its network interface.
+The API uses an HTTP-only, same-site owner session cookie and expires sessions after 8 hours.
 
 Password recovery sends a one-time code to the owner recovery email saved in **Settings**; codes are never printed in the terminal. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `SMTP_FROM` as environment variables in the deployment platform. `SMTP_SECURE=true` enables secure SMTP (it is enabled automatically on port 465). Set a valid owner email in Settings and configure SMTP before deploying. Codes expire after 10 minutes.
 

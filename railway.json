@@ -6,6 +6,10 @@
   },
   "deploy": {
     "startCommand": "node server.js",
+    "variables": {
+      "HOST": "0.0.0.0",
+      "NODE_ENV": "production"
+    },
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
