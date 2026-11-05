@@ -89,6 +89,15 @@ db.exec(`
     quantity REAL NOT NULL, movement_type TEXT NOT NULL CHECK (movement_type IN ('opening', 'sale', 'adjustment')),
     reference TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+  CREATE TABLE IF NOT EXISTS part_requests (
+    id INTEGER PRIMARY KEY, customer_name TEXT NOT NULL DEFAULT '',
+    vehicle_number TEXT NOT NULL DEFAULT '', vehicle_model TEXT NOT NULL DEFAULT '',
+    part_name TEXT NOT NULL, quantity REAL NOT NULL DEFAULT 1,
+    notes TEXT NOT NULL DEFAULT '', reminder_date TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'Open'
+      CHECK (status IN ('Open', 'Ordered', 'Fulfilled', 'Cancelled')),
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  );
   CREATE TABLE IF NOT EXISTS purchase_orders (
     id INTEGER PRIMARY KEY, order_number TEXT NOT NULL UNIQUE,
     supplier_id INTEGER NOT NULL REFERENCES suppliers(id),
@@ -129,8 +138,8 @@ db.exec(`
   );
   CREATE TABLE IF NOT EXISTS quotations (
     id INTEGER PRIMARY KEY, quotation_number TEXT NOT NULL UNIQUE,
-    customer_id INTEGER NOT NULL REFERENCES customers(id), customer_name TEXT NOT NULL,
-    customer_phone TEXT NOT NULL DEFAULT '', customer_address TEXT NOT NULL DEFAULT '',
+    customer_id INTEGER REFERENCES customers(id), customer_name TEXT NOT NULL,
+    customer_phone TEXT NOT NULL DEFAULT '', customer_email TEXT NOT NULL DEFAULT '', customer_address TEXT NOT NULL DEFAULT '',
     customer_gstin TEXT NOT NULL DEFAULT '', place_of_supply TEXT NOT NULL DEFAULT 'Maharashtra',
     quotation_date TEXT NOT NULL, valid_until TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
     taxable_amount REAL NOT NULL, cgst REAL NOT NULL DEFAULT 0, sgst REAL NOT NULL DEFAULT 0,
@@ -169,6 +178,65 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS invoice_items_product_idx ON invoice_items(product_id);
 `)
 
+const purchaseColumns = new Set(db.prepare('PRAGMA table_info(purchases)').all().map((column) => column.name))
+if (!purchaseColumns.has('invoice_file_name')) db.exec("ALTER TABLE purchases ADD COLUMN invoice_file_name TEXT NOT NULL DEFAULT ''")
+if (!purchaseColumns.has('invoice_file_type')) db.exec("ALTER TABLE purchases ADD COLUMN invoice_file_type TEXT NOT NULL DEFAULT ''")
+if (!purchaseColumns.has('invoice_file_data')) db.exec("ALTER TABLE purchases ADD COLUMN invoice_file_data TEXT NOT NULL DEFAULT ''")
+if (!purchaseColumns.has('invoice_taxable_amount')) db.exec("ALTER TABLE purchases ADD COLUMN invoice_taxable_amount REAL NOT NULL DEFAULT 0")
+if (!purchaseColumns.has('invoice_cgst')) db.exec("ALTER TABLE purchases ADD COLUMN invoice_cgst REAL NOT NULL DEFAULT 0")
+if (!purchaseColumns.has('invoice_sgst')) db.exec("ALTER TABLE purchases ADD COLUMN invoice_sgst REAL NOT NULL DEFAULT 0")
+if (!purchaseColumns.has('invoice_igst')) db.exec("ALTER TABLE purchases ADD COLUMN invoice_igst REAL NOT NULL DEFAULT 0")
+if (!purchaseColumns.has('invoice_total')) db.exec("ALTER TABLE purchases ADD COLUMN invoice_total REAL NOT NULL DEFAULT 0")
+
+const quotationCustomerColumn = db.prepare('PRAGMA table_info(quotations)').all().find((column) => column.name === 'customer_id')
+if (quotationCustomerColumn?.notnull) {
+  db.pragma('foreign_keys = OFF')
+  db.exec(`
+    BEGIN;
+    ALTER TABLE quotation_items RENAME TO quotation_items_legacy;
+    ALTER TABLE quotations RENAME TO quotations_legacy;
+    CREATE TABLE quotations (
+      id INTEGER PRIMARY KEY, quotation_number TEXT NOT NULL UNIQUE,
+      customer_id INTEGER REFERENCES customers(id), customer_name TEXT NOT NULL,
+      customer_phone TEXT NOT NULL DEFAULT '', customer_email TEXT NOT NULL DEFAULT '', customer_address TEXT NOT NULL DEFAULT '',
+      customer_gstin TEXT NOT NULL DEFAULT '', place_of_supply TEXT NOT NULL DEFAULT 'Maharashtra',
+      quotation_date TEXT NOT NULL, valid_until TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '',
+      taxable_amount REAL NOT NULL, cgst REAL NOT NULL DEFAULT 0, sgst REAL NOT NULL DEFAULT 0,
+      igst REAL NOT NULL DEFAULT 0, total REAL NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Open' CHECK (status IN ('Open', 'Converted', 'Cancelled')),
+      invoice_id INTEGER UNIQUE REFERENCES invoices(id),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO quotations (
+      id, quotation_number, customer_id, customer_name, customer_phone, customer_address,
+      customer_gstin, place_of_supply, quotation_date, valid_until, notes, taxable_amount,
+      cgst, sgst, igst, total, status, invoice_id, created_at
+    )
+    SELECT id, quotation_number, customer_id, customer_name, customer_phone, customer_address,
+      customer_gstin, place_of_supply, quotation_date, valid_until, notes, taxable_amount,
+      cgst, sgst, igst, total, status, invoice_id, created_at
+    FROM quotations_legacy;
+    CREATE TABLE quotation_items (
+      id INTEGER PRIMARY KEY, quotation_id INTEGER NOT NULL REFERENCES quotations(id) ON DELETE CASCADE,
+      product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+      description TEXT NOT NULL, hsn TEXT NOT NULL DEFAULT '',
+      quantity REAL NOT NULL CHECK (quantity > 0), unit TEXT NOT NULL DEFAULT 'pcs',
+      unit_price REAL NOT NULL CHECK (unit_price >= 0), gst_rate REAL NOT NULL DEFAULT 18,
+      taxable_amount REAL NOT NULL, cgst REAL NOT NULL DEFAULT 0, sgst REAL NOT NULL DEFAULT 0,
+      igst REAL NOT NULL DEFAULT 0, amount REAL NOT NULL
+    );
+    INSERT INTO quotation_items SELECT * FROM quotation_items_legacy;
+    DROP TABLE quotation_items_legacy;
+    DROP TABLE quotations_legacy;
+    COMMIT;
+  `)
+  db.pragma('foreign_keys = ON')
+}
+const quotationColumns = new Set(db.prepare('PRAGMA table_info(quotations)').all().map((column) => column.name))
+if (!quotationColumns.has('customer_email')) {
+  db.exec("ALTER TABLE quotations ADD COLUMN customer_email TEXT NOT NULL DEFAULT ''")
+}
+
 const supplierColumns = new Set(db.prepare('PRAGMA table_info(suppliers)').all().map((column) => column.name))
 if (!supplierColumns.has('place_of_supply')) {
   db.exec("ALTER TABLE suppliers ADD COLUMN place_of_supply TEXT NOT NULL DEFAULT 'Maharashtra'")
@@ -180,6 +248,11 @@ if (!productColumns.has('vehicle_make')) {
 }
 if (!productColumns.has('vehicle_model')) {
   db.exec("ALTER TABLE products ADD COLUMN vehicle_model TEXT NOT NULL DEFAULT 'All models'")
+}
+
+const partRequestColumns = new Set(db.prepare('PRAGMA table_info(part_requests)').all().map((column) => column.name))
+if (!partRequestColumns.has('reminder_date')) {
+  db.exec("ALTER TABLE part_requests ADD COLUMN reminder_date TEXT NOT NULL DEFAULT ''")
 }
 
 if (db.prepare('SELECT COUNT(*) AS count FROM products').get().count === 0) {

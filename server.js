@@ -4,7 +4,7 @@ import { db, databasePath, projectRoot } from './server/database.js'
 import { registerAuthRoutes } from './server/auth.js'
 
 const app = express()
-app.use(express.json({ limit: '1mb' }))
+app.use(express.json({ limit: '12mb' }))
 const requireOwner = registerAuthRoutes(app, db)
 app.use('/api', requireOwner)
 
@@ -35,7 +35,16 @@ const positiveOrZero = (value, label, { allowZero = true, max = 1_000_000_000 } 
   return number
 }
 
+const quantityForUnit = (value, label, unit = 'pcs') => {
+  const quantity = positiveOrZero(value, label, { allowZero: false })
+  if (/^(pcs?|pieces?|units?)$/i.test(String(unit).trim()) && !Number.isInteger(quantity)) {
+    throw new HttpError(400, `${label} must be a whole number for ${unit}.`)
+  }
+  return quantity
+}
+
 const round = (value) => Math.round((value + Number.EPSILON) * 100) / 100
+const moneyText = (value) => `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const validDate = (value, label) => {
   const text = requiredText(value, label, 10)
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text)
@@ -76,6 +85,61 @@ app.get('/api/products', (_req, res) => res.json(listRows(`
 `)))
 app.get('/api/customers', (_req, res) => res.json(listRows('SELECT * FROM customers ORDER BY name COLLATE NOCASE')))
 app.get('/api/suppliers', (_req, res) => res.json(listRows('SELECT * FROM suppliers ORDER BY name COLLATE NOCASE')))
+app.get('/api/part-requests', (_req, res) => res.json(listRows(`
+  SELECT * FROM part_requests WHERE status IN ('Open', 'Ordered')
+  ORDER BY CASE status WHEN 'Open' THEN 0 ELSE 1 END, created_at DESC
+`)))
+app.post('/api/chat', (req, res) => {
+  const message = requiredText(req.body.message, 'Message', 300).toLowerCase()
+  if (message.includes('low stock')) {
+    const rows = listRows(`SELECT name, stock, unit FROM products WHERE stock <= reorder_level ORDER BY stock, name COLLATE NOCASE LIMIT 10`)
+    return res.json({ reply: rows.length ? `Low stock:\n${rows.map((row) => `• ${row.name}: ${row.stock} ${row.unit}`).join('\n')}` : 'No parts are currently below their reorder level.' })
+  }
+  if (message.includes('owe') || message.includes('due')) {
+    const customers = db.prepare(`SELECT customer_name, ROUND(SUM(total - paid_amount), 2) AS balance FROM invoices WHERE total > paid_amount GROUP BY customer_id, customer_name ORDER BY balance DESC LIMIT 5`).all()
+    const suppliers = db.prepare(`SELECT supplier_name, ROUND(SUM(total - paid_amount), 2) AS balance FROM purchases WHERE total > paid_amount GROUP BY supplier_id, supplier_name ORDER BY balance DESC LIMIT 5`).all()
+    const lines = [...customers.map((row) => `${row.customer_name} owes ${moneyText(row.balance)}`), ...suppliers.map((row) => `You owe ${row.supplier_name} ${moneyText(row.balance)}`)]
+    return res.json({ reply: lines.length ? lines.join('\n') : 'There are no outstanding balances.' })
+  }
+  if (message.includes('invoice')) {
+    const rows = listRows(`SELECT invoice_number, customer_name, total, invoice_date FROM invoices ORDER BY invoice_date DESC, id DESC LIMIT 5`)
+    return res.json({ reply: rows.length ? rows.map((row) => `${row.invoice_number} · ${row.customer_name} · ${moneyText(row.total)} · ${row.invoice_date}`).join('\n') : 'No invoices found.' })
+  }
+  if (message.includes('sales') || message.includes('sale')) {
+    const condition = message.includes('today') ? `date(invoice_date) = date('now','localtime')` : message.includes('month') ? `strftime('%Y-%m', invoice_date) = strftime('%Y-%m','now','localtime')` : '1 = 1'
+    const result = db.prepare(`SELECT COUNT(*) AS count, COALESCE(SUM(total), 0) AS total FROM invoices WHERE ${condition}`).get()
+    return res.json({ reply: `${message.includes('today') ? "Today's" : message.includes('month') ? "This month's" : 'Recorded'} sales: ${result.count} invoice${result.count === 1 ? '' : 's'}, ${moneyText(result.total)}.` })
+  }
+  if (message.includes('best') || message.includes('selling')) {
+    const rows = listRows(`SELECT p.name, COALESCE(SUM(ii.quantity), 0) AS units FROM products p JOIN invoice_items ii ON ii.product_id = p.id GROUP BY p.id ORDER BY units DESC LIMIT 5`)
+    return res.json({ reply: rows.length ? rows.map((row) => `${row.name}: ${row.units} sold`).join('\n') : 'There is not enough sales history yet.' })
+  }
+  res.json({ reply: 'Try asking about today’s sales, sales this month, low stock, outstanding dues, recent invoices or best-selling parts.' })
+})
+app.post('/api/part-requests', (req, res) => {
+  const partName = requiredText(req.body.part_name, 'Part name')
+  const quantity = positiveOrZero(req.body.quantity || 1, 'Quantity', { allowZero: false })
+  const reminderDate = req.body.reminder_date ? validDate(req.body.reminder_date, 'Reminder date') : ''
+  const result = db.prepare(`
+    INSERT INTO part_requests (customer_name, vehicle_number, vehicle_model, part_name, quantity, notes, reminder_date)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    optionalText(req.body.customer_name, 200),
+    optionalText(req.body.vehicle_number, 40),
+    optionalText(req.body.vehicle_model, 120),
+    partName,
+    quantity,
+    optionalText(req.body.notes, 500),
+    reminderDate,
+  )
+  res.status(201).json(db.prepare('SELECT * FROM part_requests WHERE id = ?').get(result.lastInsertRowid))
+})
+app.put('/api/part-requests/:id/complete', (req, res) => {
+  const id = positiveOrZero(req.params.id, 'Part request ID', { allowZero: false })
+  const updated = db.prepare("UPDATE part_requests SET status = 'Fulfilled' WHERE id = ? AND status IN ('Open', 'Ordered')").run(id)
+  if (!updated.changes) throw new HttpError(404, 'Open part request not found.')
+  res.json(db.prepare('SELECT * FROM part_requests WHERE id = ?').get(id))
+})
 app.get('/api/invoices', (_req, res) => res.json(listRows(`
   SELECT i.id, i.invoice_number, i.invoice_date, i.total, i.paid_amount, i.status,
     i.taxable_amount, i.customer_name, i.customer_phone,
@@ -152,6 +216,12 @@ app.get('/api/overview', (_req, res) => {
       forecast_status: dailyDemand === 0
         ? Number(part.stock) <= Number(part.reorder_level) ? 'At reorder level' : 'Building sales history'
         : daysOfStock <= 30 ? 'Reorder soon' : 'Stock looks sufficient',
+      purchase_priority: suggestedOrder > 0
+        ? Number(part.stock) === 0 ? 'High' : daysOfStock !== null && daysOfStock <= 14 ? 'High' : 'Medium'
+        : 'None',
+      purchase_reason: suggestedOrder > 0
+        ? Number(part.stock) === 0 ? 'Out of stock' : daysOfStock !== null && daysOfStock <= 14 ? 'Less than 15 days of stock' : 'Below forecasted requirement'
+        : '',
     }
   })
   res.json({
@@ -223,9 +293,9 @@ app.post('/api/products', (req, res) => {
   const purchasePrice = positiveOrZero(req.body.purchase_price, 'Cost price')
   const sellingPrice = positiveOrZero(req.body.selling_price, 'Selling price')
   const gstRate = positiveOrZero(req.body.gst_rate ?? 18, 'GST rate', { max: 100 })
-  const stock = positiveOrZero(req.body.stock, 'Opening stock')
   const reorder = positiveOrZero(req.body.reorder_level ?? 0, 'Reorder level')
   const unit = optionalText(req.body.unit || 'pcs', 20)
+  const stock = req.body.stock === '' || req.body.stock === undefined ? 0 : quantityForUnit(req.body.stock, 'Opening stock', unit)
   const supplierId = req.body.supplier_id ? positiveOrZero(req.body.supplier_id, 'Supplier', { allowZero: false }) : null
   const create = db.transaction(() => {
     const result = db.prepare(`
@@ -270,13 +340,13 @@ app.put('/api/products/:id', (req, res) => {
 
 app.post('/api/products/:id/stock', (req, res) => {
   const productId = positiveOrZero(req.params.id, 'Part ID', { allowZero: false })
-  const quantity = positiveOrZero(req.body.quantity, 'Received quantity', { allowZero: false })
   const unitCost = req.body.unit_cost === '' || req.body.unit_cost === undefined
     ? null
     : positiveOrZero(req.body.unit_cost, 'Updated cost price')
   const update = db.transaction(() => {
-    const product = db.prepare('SELECT id FROM products WHERE id = ?').get(productId)
+    const product = db.prepare('SELECT id, unit FROM products WHERE id = ?').get(productId)
     if (!product) throw new HttpError(404, 'Part not found.')
+    const quantity = quantityForUnit(req.body.quantity, 'Received quantity', product.unit)
     if (unitCost === null) db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?').run(quantity, productId)
     else db.prepare('UPDATE products SET stock = stock + ?, purchase_price = ? WHERE id = ?').run(quantity, unitCost, productId)
     db.prepare(`
@@ -305,7 +375,7 @@ app.post('/api/invoices', (req, res) => {
     const productId = positiveOrZero(item.product_id, 'Part', { allowZero: false })
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId)
     if (!product) throw new HttpError(400, 'A selected part no longer exists. Refresh and try again.')
-    const quantity = positiveOrZero(item.quantity, `${product.name} quantity`, { allowZero: false })
+    const quantity = quantityForUnit(item.quantity, `${product.name} quantity`, product.unit)
     if (quantity > product.stock) throw new HttpError(400, `${product.name} has only ${product.stock} ${product.unit} in stock.`)
     const unitPrice = item.unit_price === undefined || item.unit_price === '' ? product.selling_price : positiveOrZero(item.unit_price, `${product.name} price`)
     const taxable = round(quantity * unitPrice)
@@ -330,7 +400,7 @@ app.post('/api/invoices', (req, res) => {
         customer_email, customer_address, customer_gstin, invoice_date, due_date, dispatched_through,
         vehicle_number, vehicle_model, engine_number, place_of_supply, notes,
         taxable_amount, cgst, sgst, igst, total)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(invoiceNumber, customerId, customer.name, customer.phone, customer.email,
       customer.address, customer.gstin, invoiceDate, dueDate,
       optionalText(req.body.dispatched_through, 100), optionalText(req.body.vehicle_number, 40).toUpperCase(),
@@ -402,11 +472,9 @@ function purchaseOrderDetails(id) {
   if (!order) throw new HttpError(404, 'Purchase order not found.')
   order.items = listRows('SELECT * FROM purchase_order_items WHERE order_id = ? ORDER BY id', id)
   order.taxable_amount = order.items.reduce((sum, item) => sum + item.quantity * item.unit_cost, 0)
-  const tax = order.total - order.taxable_amount
-  const isIntraStateSupplier = isIntraState(order.supplier_place_of_supply || 'Maharashtra')
-  order.cgst = isIntraStateSupplier ? round(tax / 2) : 0
-  order.sgst = isIntraStateSupplier ? round(tax - order.cgst) : 0
-  order.igst = isIntraStateSupplier ? 0 : tax
+  order.cgst = 0
+  order.sgst = 0
+  order.igst = 0
   order.shop = db.prepare('SELECT name, address, phone, email, gstin FROM shop WHERE id = 1').get()
   return order
 }
@@ -452,25 +520,27 @@ app.post('/api/purchase-orders', (req, res) => {
   if (!Array.isArray(input) || input.length < 1 || input.length > 100) {
     throw new HttpError(400, 'Add between 1 and 100 purchase order items.')
   }
-  const lines = input.map((item) => {
-    const productId = positiveOrZero(item.product_id, 'Part', { allowZero: false })
-    const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId)
+  const lineInputs = input.map((item) => {
+    const newProduct = item.new_product
+    const product = newProduct
+      ? {
+          name: requiredText(newProduct.name, 'New part name'),
+          sku: requiredText(newProduct.sku, 'New part SKU', 60),
+          hsn: optionalText(newProduct.hsn, 20),
+          category: optionalText(newProduct.category, 80),
+          vehicle_make: requiredText(newProduct.vehicle_make || 'Universal', 'Vehicle make', 80),
+          vehicle_model: requiredText(newProduct.vehicle_model || 'All models', 'Vehicle model', 120),
+          purchase_price: positiveOrZero(newProduct.purchase_price, 'New part cost'),
+          selling_price: positiveOrZero(newProduct.selling_price || newProduct.purchase_price, 'New part sale price'),
+          gst_rate: positiveOrZero(newProduct.gst_rate || 0, 'New part GST', { max: 100 }),
+          unit: requiredText(newProduct.unit || 'pcs', 'New part unit', 20),
+        }
+      : db.prepare('SELECT * FROM products WHERE id = ?').get(positiveOrZero(item.product_id, 'Part', { allowZero: false }))
     if (!product) throw new HttpError(400, 'A selected part no longer exists. Refresh and try again.')
-    const quantity = positiveOrZero(item.quantity, `${product.name} quantity`, { allowZero: false })
-    const unitCost = item.unit_cost === undefined || item.unit_cost === ''
-      ? product.purchase_price
-      : positiveOrZero(item.unit_cost, `${product.name} cost`)
-    const taxable = round(quantity * unitCost)
-    const tax = round(taxable * product.gst_rate / 100)
-    return {
-      product, quantity, unitCost, taxable,
-      cgst: isIntraState(supplier.place_of_supply || 'Maharashtra') ? round(tax / 2) : 0,
-      sgst: isIntraState(supplier.place_of_supply || 'Maharashtra') ? round(tax - round(tax / 2)) : 0,
-      igst: isIntraState(supplier.place_of_supply || 'Maharashtra') ? 0 : tax,
-      amount: round(taxable + tax),
-    }
+    const quantity = quantityForUnit(item.quantity, `${product.name} quantity`, product.unit)
+    const unitCost = item.unit_cost === undefined || item.unit_cost === '' ? product.purchase_price : positiveOrZero(item.unit_cost, `${product.name} cost`)
+    return { product, quantity, unitCost, newProduct }
   })
-  const totals = documentTotals(lines, supplier.place_of_supply || 'Maharashtra')
   const orderId = db.transaction(() => {
     if (!supplierId) {
       const result = db.prepare(`
@@ -480,6 +550,20 @@ app.post('/api/purchase-orders', (req, res) => {
       supplierId = Number(result.lastInsertRowid)
       supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(result.lastInsertRowid)
     }
+    const lines = lineInputs.map((line) => {
+      let product = line.product
+      if (line.newProduct) {
+        const productResult = db.prepare(`
+          INSERT INTO products (sku, name, hsn, category, vehicle_make, vehicle_model, supplier_id,
+            purchase_price, selling_price, gst_rate, stock, reorder_level, unit)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
+        `).run(product.sku, product.name, product.hsn, product.category, product.vehicle_make, product.vehicle_model,
+          supplierId, product.purchase_price, product.selling_price, product.gst_rate, product.unit)
+        product = db.prepare('SELECT * FROM products WHERE id = ?').get(productResult.lastInsertRowid)
+      }
+      const taxable = round(line.quantity * line.unitCost)
+      return { product, quantity: line.quantity, unitCost: line.unitCost, taxable, amount: taxable }
+    })
     const count = db.prepare('SELECT COUNT(*) AS count FROM purchase_orders').get().count
     const number = optionalText(req.body.order_number, 50) || `PO-${String(count + 1).padStart(5, '0')}`
     const result = db.prepare(`
@@ -491,7 +575,7 @@ app.post('/api/purchase-orders', (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `)
     lines.forEach((line) => insertItem.run(result.lastInsertRowid, line.product.id, line.product.name,
-      line.product.sku, line.quantity, line.unitCost, line.product.gst_rate, line.amount))
+      line.product.sku, line.quantity, line.unitCost, 0, line.amount))
     return result.lastInsertRowid
   })()
   res.status(201).json(purchaseOrderDetails(orderId))
@@ -500,6 +584,10 @@ app.post('/api/purchase-orders', (req, res) => {
 app.post('/api/purchase-orders/:id/receive', (req, res) => {
   const orderId = positiveOrZero(req.params.id, 'Purchase order ID', { allowZero: false })
   const suppliedInvoice = optionalText(req.body.supplier_invoice_number, 80)
+  const invoiceDetails = req.body.invoice_details || {}
+  const invoiceNumber = optionalText(req.body.invoice_file_name, 180)
+  const invoiceType = optionalText(req.body.invoice_file_type, 120)
+  const invoiceData = optionalText(req.body.invoice_file_data, 10_000_000)
   const receive = db.transaction(() => {
     const order = db.prepare('SELECT * FROM purchase_orders WHERE id = ?').get(orderId)
     if (!order) throw new HttpError(404, 'Purchase order not found.')
@@ -508,17 +596,21 @@ app.post('/api/purchase-orders/:id/receive', (req, res) => {
     if (!items.length) throw new HttpError(400, 'The purchase order has no items.')
     const supplier = db.prepare('SELECT place_of_supply FROM suppliers WHERE id = ?').get(order.supplier_id)
     const purchaseLines = items.map((item) => {
-      const tax = round(item.amount - item.quantity * item.unit_cost)
       const taxable = round(item.quantity * item.unit_cost)
-      const intraState = isIntraState(supplier?.place_of_supply || 'Maharashtra')
       return {
         ...item, taxable,
-        cgst: intraState ? round(tax / 2) : 0,
-        sgst: intraState ? round(tax - round(tax / 2)) : 0,
-        igst: intraState ? 0 : tax,
+        cgst: 0, sgst: 0, igst: 0,
       }
     })
-    const totals = documentTotals(purchaseLines, supplier?.place_of_supply || 'Maharashtra')
+    const orderTotals = documentTotals(purchaseLines, supplier?.place_of_supply || 'Maharashtra')
+    const numberFromInvoice = (value, label) => value === '' || value === undefined ? 0 : positiveOrZero(value, label)
+    const totals = {
+      taxable: numberFromInvoice(invoiceDetails.taxable_amount, 'Invoice taxable amount') || orderTotals.taxable,
+      cgst: numberFromInvoice(invoiceDetails.cgst, 'Invoice CGST'),
+      sgst: numberFromInvoice(invoiceDetails.sgst, 'Invoice SGST'),
+      igst: numberFromInvoice(invoiceDetails.igst, 'Invoice IGST'),
+      total: numberFromInvoice(invoiceDetails.total, 'Invoice total') || orderTotals.taxable,
+    }
     const purchaseCount = db.prepare('SELECT COUNT(*) AS count FROM purchases').get().count
     const purchaseNumber = `PUR-${String(purchaseCount + 1).padStart(5, '0')}`
     const now = new Date()
@@ -526,10 +618,12 @@ app.post('/api/purchase-orders/:id/receive', (req, res) => {
     const purchaseDate = validDate(req.body.purchase_date || localToday, 'Purchase date')
     const purchase = db.prepare(`
       INSERT INTO purchases (purchase_number, purchase_order_id, supplier_id, supplier_name,
-        supplier_invoice_number, purchase_date, taxable_amount, cgst, sgst, igst, total)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        supplier_invoice_number, purchase_date, taxable_amount, cgst, sgst, igst, total,
+        invoice_file_name, invoice_file_type, invoice_file_data, invoice_taxable_amount, invoice_cgst, invoice_sgst, invoice_igst, invoice_total)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(purchaseNumber, orderId, order.supplier_id, order.supplier_name,
-      suppliedInvoice, purchaseDate, totals.taxable, totals.cgst, totals.sgst, totals.igst, totals.total)
+      suppliedInvoice, purchaseDate, totals.taxable, totals.cgst, totals.sgst, totals.igst, totals.total,
+      invoiceNumber, invoiceType, invoiceData, totals.taxable, totals.cgst, totals.sgst, totals.igst, totals.total)
     const insertItem = db.prepare(`
       INSERT INTO purchase_items (purchase_id, product_id, description, sku, quantity, unit_cost, gst_rate, taxable_amount, amount)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -555,8 +649,22 @@ app.post('/api/purchase-orders/:id/receive', (req, res) => {
 })
 
 app.get('/api/purchases', (_req, res) => res.json(listRows(`
-  SELECT * FROM purchases ORDER BY purchase_date DESC, id DESC
+  SELECT id, purchase_number, purchase_order_id, supplier_id, supplier_name,
+    supplier_invoice_number, purchase_date, taxable_amount, cgst, sgst, igst,
+    total, paid_amount, status, invoice_file_name, invoice_file_type
+  FROM purchases ORDER BY purchase_date DESC, id DESC
 `)))
+
+app.get('/api/purchases/:id/invoice', (req, res) => {
+  const id = positiveOrZero(req.params.id, 'Purchase ID', { allowZero: false })
+  const purchase = db.prepare('SELECT invoice_file_name, invoice_file_type, invoice_file_data FROM purchases WHERE id = ?').get(id)
+  if (!purchase || !purchase.invoice_file_data) throw new HttpError(404, 'Supplier invoice file not found.')
+  const match = /^data:([^;]+);base64,(.+)$/.exec(purchase.invoice_file_data)
+  if (!match) throw new HttpError(404, 'Supplier invoice file is invalid.')
+  res.setHeader('Content-Type', purchase.invoice_file_type || match[1])
+  res.setHeader('Content-Disposition', `inline; filename="${purchase.invoice_file_name || 'supplier-invoice'}"`)
+  res.send(Buffer.from(match[2], 'base64'))
+})
 
 app.post('/api/purchases/:id/payments', (req, res) => {
   const purchaseId = positiveOrZero(req.params.id, 'Purchase ID', { allowZero: false })
@@ -590,13 +698,24 @@ app.get('/api/quotations/:id', (req, res) => {
 })
 
 app.post('/api/quotations', (req, res) => {
-  const customerId = positiveOrZero(req.body.customer_id, 'Customer', { allowZero: false })
-  const customer = db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId)
-  if (!customer) throw new HttpError(400, 'Select an existing customer.')
+  const rawCustomerId = String(req.body.customer_id ?? '').trim()
+  const customerId = rawCustomerId
+    ? positiveOrZero(rawCustomerId, 'Customer', { allowZero: false })
+    : null
+  const customer = customerId ? db.prepare('SELECT * FROM customers WHERE id = ?').get(customerId) : null
+  if (customerId && !customer) throw new HttpError(400, 'The selected customer no longer exists.')
+  const prospect = customer || {
+    name: requiredText(req.body.prospect_name, 'Prospect name'),
+    phone: optionalText(req.body.prospect_phone, 40),
+    email: optionalText(req.body.prospect_email, 120),
+    address: optionalText(req.body.prospect_address, 500),
+    gstin: optionalText(req.body.prospect_gstin, 15),
+    place_of_supply: optionalText(req.body.prospect_place_of_supply || 'Maharashtra', 80),
+  }
   const quotationDate = validDate(req.body.quotation_date, 'Quotation date')
   const validUntil = req.body.valid_until ? validDate(req.body.valid_until, 'Valid until') : ''
   if (validUntil && validUntil < quotationDate) throw new HttpError(400, 'Validity date cannot be before the quotation date.')
-  const place = optionalText(req.body.place_of_supply || customer.place_of_supply || 'Maharashtra', 80)
+  const place = optionalText(req.body.place_of_supply || prospect.place_of_supply || 'Maharashtra', 80)
   const input = req.body.items
   if (!Array.isArray(input) || input.length < 1 || input.length > 100) {
     throw new HttpError(400, 'Add between 1 and 100 quotation items.')
@@ -605,7 +724,7 @@ app.post('/api/quotations', (req, res) => {
     const productId = positiveOrZero(item.product_id, 'Part', { allowZero: false })
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId)
     if (!product) throw new HttpError(400, 'A selected part no longer exists. Refresh and try again.')
-    const quantity = positiveOrZero(item.quantity, `${product.name} quantity`, { allowZero: false })
+    const quantity = quantityForUnit(item.quantity, `${product.name} quantity`, product.unit)
     const unitPrice = item.unit_price === undefined || item.unit_price === ''
       ? product.selling_price
       : positiveOrZero(item.unit_price, `${product.name} price`)
@@ -626,10 +745,10 @@ app.post('/api/quotations', (req, res) => {
     const number = optionalText(req.body.quotation_number, 50) || `QUO-${String(count + 1).padStart(5, '0')}`
     const result = db.prepare(`
       INSERT INTO quotations (quotation_number, customer_id, customer_name, customer_phone,
-        customer_address, customer_gstin, place_of_supply, quotation_date, valid_until, notes,
+        customer_email, customer_address, customer_gstin, place_of_supply, quotation_date, valid_until, notes,
         taxable_amount, cgst, sgst, igst, total)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(number, customerId, customer.name, customer.phone, customer.address, customer.gstin,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(number, customerId, prospect.name, prospect.phone, prospect.email, prospect.address, prospect.gstin,
       place, quotationDate, validUntil, optionalText(req.body.notes), totals.taxable,
       totals.cgst, totals.sgst, totals.igst, totals.total)
     const insertItem = db.prepare(`
@@ -651,6 +770,15 @@ app.post('/api/quotations/:id/convert', (req, res) => {
     const quotation = db.prepare('SELECT * FROM quotations WHERE id = ?').get(quotationId)
     if (!quotation) throw new HttpError(404, 'Quotation not found.')
     if (quotation.status !== 'Open') throw new HttpError(409, 'Only an open quotation can be converted.')
+    let customerId = quotation.customer_id
+    if (!customerId) {
+      const customerResult = db.prepare(`
+        INSERT INTO customers (name, phone, email, address, gstin, place_of_supply)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(quotation.customer_name, quotation.customer_phone, quotation.customer_address,
+        quotation.customer_email, quotation.customer_gstin, quotation.place_of_supply)
+      customerId = customerResult.lastInsertRowid
+    }
     const lines = db.prepare('SELECT * FROM quotation_items WHERE quotation_id = ? ORDER BY id').all(quotationId)
     if (!lines.length) throw new HttpError(400, 'The quotation has no items.')
     const products = lines.map((line) => {
@@ -664,11 +792,11 @@ app.post('/api/quotations/:id/convert', (req, res) => {
       || `INV-${quotation.quotation_date.slice(2, 4)}/${String(count + 1).padStart(4, '0')}`
     const invoice = db.prepare(`
       INSERT INTO invoices (invoice_number, customer_id, customer_name, customer_phone,
-        customer_address, customer_gstin, invoice_date, place_of_supply, notes,
+        customer_email, customer_address, customer_gstin, invoice_date, place_of_supply, notes,
         taxable_amount, cgst, sgst, igst, total)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(invoiceNumber, quotation.customer_id, quotation.customer_name, quotation.customer_phone,
-      '', quotation.customer_gstin, quotation.quotation_date, quotation.place_of_supply, quotation.notes,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(invoiceNumber, customerId, quotation.customer_name, quotation.customer_phone, quotation.customer_email,
+      quotation.customer_address, quotation.customer_gstin, quotation.quotation_date, quotation.place_of_supply, quotation.notes,
       quotation.taxable_amount, quotation.cgst, quotation.sgst, quotation.igst, quotation.total)
     const insertItem = db.prepare(`
       INSERT INTO invoice_items (invoice_id, product_id, description, hsn, quantity, unit,

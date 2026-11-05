@@ -22,8 +22,15 @@ function Chart({ monthly = [] }) {
   )
 }
 
-export default function Dashboard({ overview = {}, onOpenInvoice, onGo }) {
+export default function Dashboard({ overview = {}, partRequests = [], onOpenInvoice, onGo, onAddRequest, onCompleteRequest }) {
   const grossProfit = Number(overview.gross_profit || 0)
+  const purchaseRecommendations = (overview.inventory_forecast || [])
+    .filter((part) => Number(part.suggested_order) > 0)
+    .sort((a, b) => {
+      const priority = { High: 0, Medium: 1, None: 2 }
+      return (priority[a.purchase_priority] ?? 2) - (priority[b.purchase_priority] ?? 2)
+        || Number(a.days_of_stock ?? Number.MAX_SAFE_INTEGER) - Number(b.days_of_stock ?? Number.MAX_SAFE_INTEGER)
+    })
   const stats = [
     { label: 'Sales (taxable)', value: shortMoney(overview.taxable_sales), note: `${overview.invoice_count || 0} invoices`, icon: Receipt },
     { label: grossProfit < 0 ? 'Gross loss' : 'Gross profit', value: shortMoney(grossProfit), note: 'Sales less part cost', icon: BarChart3, negative: grossProfit < 0 },
@@ -60,7 +67,7 @@ export default function Dashboard({ overview = {}, onOpenInvoice, onGo }) {
           </div>) : <div className="highlight-empty">No parts are below their reorder level.</div>}
         </section>
       </div>
-      <section className="panel forecast-panel">
+      <section className="panel forecast-panel" id="customer-part-requests">
         <div className="section-heading"><div><h2>Smart stock forecast</h2><p>Local estimate from each part’s last 90 days of recorded sales; not an external AI service.</p></div><button className="text-button" onClick={() => onGo('Parts')}>Manage parts</button></div>
         {overview.inventory_forecast?.length ? <div className="scroll"><table><thead><tr><th>Part / fitment</th><th>Sold in 90 days</th><th>Est. next 30 days</th><th>Stock cover</th><th>Suggested order</th><th>Signal</th></tr></thead>
           <tbody>{overview.inventory_forecast.slice(0, 8).map((part) => <tr key={part.id}>
@@ -72,6 +79,36 @@ export default function Dashboard({ overview = {}, onOpenInvoice, onGo }) {
             <td><span className={part.forecast_status === 'Reorder soon' || part.forecast_status === 'At reorder level' ? 'stock-low' : 'stock-ok'}>{part.forecast_status}</span></td>
           </tr>)}</tbody></table></div> : <div className="highlight-empty">Add parts to start tracking inventory and demand.</div>}
         {Number(overview.demo_part_count) > 0 && <p className="demo-notice" role="note">Sample inventory is loaded for setup and testing ({overview.demo_part_count} parts; SKUs start with DEMO-). Verify or replace sample stock and fitment before selling.</p>}
+      </section>
+      <section className="panel forecast-panel">
+        <div className="section-heading">
+          <div><h2>Next purchase recommendations</h2><p>Parts to consider purchasing based on recent demand and current stock</p></div>
+          <button className="text-button" onClick={() => onGo('Purchase Orders')}>Create purchase order</button>
+        </div>
+        {purchaseRecommendations.length ? <div className="scroll"><table><thead><tr><th>Priority</th><th>Part</th><th>Current stock</th><th>Suggested purchase</th><th>Reason</th></tr></thead>
+          <tbody>{purchaseRecommendations.slice(0, 8).map((part) => <tr key={part.id}>
+            <td><span className={part.purchase_priority === 'High' ? 'stock-zero' : 'stock-low'}>{part.purchase_priority || 'Review'}</span></td>
+            <td><b>{part.name}</b><small className="table-sub">{part.vehicle_make} · {part.vehicle_model}</small></td>
+            <td>{part.stock} {part.unit}</td>
+            <td><b>{part.suggested_order} {part.unit}</b></td>
+            <td>{part.purchase_reason || 'Review recent demand and stock level'}</td>
+          </tr>)}</tbody></table></div>
+          : <div className="highlight-empty">No immediate purchase recommendations. Current stock covers the forecast.</div>}
+      </section>
+      <section className="panel forecast-panel">
+        <div className="section-heading">
+          <div><h2>Customer part requests</h2><p>Remember unavailable parts requested by customers</p></div>
+          <button className="btn solid" onClick={onAddRequest}>Remember unavailable part</button>
+        </div>
+        {partRequests.length ? <div className="scroll"><table><thead><tr><th>Part</th><th>Customer</th><th>Vehicle</th><th>Qty</th><th>Status</th><th>Action</th></tr></thead>
+          <tbody>{partRequests.slice(0, 8).map((request) => <tr key={request.id}>
+            <td><b>{request.part_name}</b><small className="table-sub">{request.notes || 'No notes'}</small></td>
+            <td>{request.customer_name || 'Walk-in customer'}</td>
+            <td>{request.vehicle_number || '—'}{request.vehicle_model ? <small className="table-sub">{request.vehicle_model}</small> : null}</td>
+            <td>{request.quantity}<small className="table-sub">{request.reminder_date ? `Remind ${dateLabel(request.reminder_date)}` : 'No reminder'}</small></td>
+            <td><span className="stock-low">{request.status}</span></td>
+            <td><button className="btn btn-small" onClick={() => onCompleteRequest(request)}>Mark completed</button></td>
+          </tr>)}</tbody></table></div> : <div className="highlight-empty">No customer requests saved yet.</div>}
       </section>
     </>
   )

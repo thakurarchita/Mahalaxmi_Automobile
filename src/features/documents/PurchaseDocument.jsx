@@ -22,6 +22,7 @@ export default function PurchaseDocument({ document, kind }) {
       <section><b>{isOrder ? 'Supplier' : 'Customer'}</b><strong>{isOrder ? document.supplier_name : document.customer_name}</strong>
         <span>{isOrder ? document.supplier_address || 'Address not provided' : document.customer_address || 'Address not provided'}</span>
         {(isOrder ? document.supplier_phone : document.customer_phone) && <span>Contact no: {isOrder ? document.supplier_phone : document.customer_phone}</span>}
+        {!isOrder && document.customer_email && <span>Email: {document.customer_email}</span>}
         <span>GSTIN: {(isOrder ? document.supplier_gstin : document.customer_gstin) || 'Unregistered'}</span>
         {!isOrder && <span>Place of supply: {document.place_of_supply || '—'}</span>}
       </section>
@@ -34,11 +35,11 @@ export default function PurchaseDocument({ document, kind }) {
     </div>
     <div className="invoice-table-wrap">
       <table className="invoice-table">
-        <thead><tr><th>No.</th><th>Part / description</th><th>{isOrder ? 'SKU' : 'HSN/SAC'}</th><th>Quantity</th><th>{isOrder ? 'Unit cost' : 'Unit price'}</th><th>GST</th><th>Amount</th></tr></thead>
+        <thead><tr><th>No.</th><th>Part / description</th><th>{isOrder ? 'SKU' : 'HSN/SAC'}</th><th>Quantity</th><th>{isOrder ? 'Unit cost' : 'Unit price'}</th>{!isOrder && <th>GST</th>}<th>Amount</th></tr></thead>
         <tbody>{rows.map((item, index) => <tr key={item.id}>
           <td>{index + 1}</td><td>{item.description}</td><td>{isOrder ? item.sku || '—' : item.hsn || '—'}</td>
           <td>{Number(item.quantity).toLocaleString('en-IN')} {item.unit || 'pcs'}</td>
-          <td>{money(isOrder ? item.unit_cost : item.unit_price)}</td><td>{Number(item.gst_rate)}%</td><td>{money(item.amount)}</td>
+          <td>{money(isOrder ? item.unit_cost : item.unit_price)}</td>{!isOrder && <td>{Number(item.gst_rate)}%</td>}<td>{money(item.amount)}</td>
         </tr>)}</tbody>
       </table>
     </div>
@@ -46,10 +47,10 @@ export default function PurchaseDocument({ document, kind }) {
       <section className="bank-details"><b>{isOrder ? 'Order notes' : 'Quotation notes'}</b><span>{document.notes || 'No additional notes'}</span></section>
       <section className="invoice-totals">
         <div><span>Taxable amount</span><b>{money(document.taxable_amount || rows.reduce((sum, item) => sum + Number(isOrder ? item.quantity * item.unit_cost : item.taxable_amount), 0))}</b></div>
-        {Number(document.igst) > 0
+        {!isOrder && Number(document.igst) > 0
           ? <div><span>IGST</span><b>{money(document.igst)}</b></div>
-          : <><div><span>SGST</span><b>{money(document.sgst)}</b></div><div><span>CGST</span><b>{money(document.cgst)}</b></div></>}
-        <div className="grand-total"><span>{isOrder ? 'Estimated total' : 'Quote total'}</span><b>{money(document.total)}</b></div>
+          : !isOrder && <><div><span>SGST</span><b>{money(document.sgst)}</b></div><div><span>CGST</span><b>{money(document.cgst)}</b></div></>}
+        <div className="grand-total"><span>{isOrder ? 'Order value (before supplier invoice taxes)' : 'Quote total'}</span><b>{money(document.total)}</b></div>
       </section>
     </div>
     <footer className="invoice-signatures">

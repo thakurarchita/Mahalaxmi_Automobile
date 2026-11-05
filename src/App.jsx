@@ -20,10 +20,12 @@ import Quotations from './features/quotations/Quotations'
 import PaymentsDues from './features/payments/PaymentsDues'
 import Reports from './features/reports/Reports'
 import SettingsPage from './features/settings/SettingsPage'
+import Chatbot from './features/chatbot/Chatbot'
+import ReceivePurchaseForm from './features/forms/ReceivePurchaseForm'
 import { money } from './utils/format'
 
 const today = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-const blankData = { overview: {}, products: [], customers: [], suppliers: [], invoices: [], purchaseOrders: [], purchases: [], quotations: [], dues: { customer_total: 0, supplier_total: 0, customer_outstanding: [], supplier_outstanding: [] }, shop: null }
+const blankData = { overview: {}, products: [], customers: [], suppliers: [], invoices: [], purchaseOrders: [], purchases: [], quotations: [], partRequests: [], dues: { customer_total: 0, supplier_total: 0, customer_outstanding: [], supplier_outstanding: [] }, shop: null }
 
 export default function App() {
   const [authStatus, setAuthStatus] = useState(null)
@@ -44,6 +46,11 @@ export default function App() {
   const [businessDocumentView, setBusinessDocumentView] = useState(null)
   const [paymentTarget, setPaymentTarget] = useState(null)
   const [stockTarget, setStockTarget] = useState(null)
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const now = new Date()
+  const todayKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  const duePartRequests = data.partRequests.filter((request) => request.reminder_date && request.reminder_date <= todayKey)
+  const duePartRequestCount = duePartRequests.length
 
   async function refresh(showLoading = false) {
     if (showLoading) setLoading(true)
@@ -51,7 +58,13 @@ export default function App() {
       const [overview, products, customers, suppliers, invoices, purchaseOrders, purchases, quotations, dues, shop] = await Promise.all([
         api('/overview'), api('/products'), api('/customers'), api('/suppliers'), api('/invoices'), api('/purchase-orders'), api('/purchases'), api('/quotations'), api('/dues'), api('/shop'),
       ])
-      setData({ overview, products, customers, suppliers, invoices, purchaseOrders, purchases, quotations, dues, shop })
+      let partRequests = []
+      try {
+        partRequests = await api('/part-requests')
+      } catch (cause) {
+        console.warn('Customer part requests are unavailable until the API server is restarted.', cause)
+      }
+      setData({ overview, products, customers, suppliers, invoices, purchaseOrders, purchases, quotations, partRequests, dues, shop })
       setError('')
     } catch (cause) {
       setError(cause.message)
@@ -207,15 +220,45 @@ export default function App() {
     }
   }
 
-  async function receivePurchaseOrder(order) {
-    const supplierInvoice = window.prompt('Supplier invoice number (optional):', '')
-    if (supplierInvoice === null) return
+  async function createPartRequest(event) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    setSaving(true)
+    setFormError('')
     try {
-      await api(`/purchase-orders/${order.id}/receive`, { method: 'POST', body: JSON.stringify({ supplier_invoice_number: supplierInvoice }) })
+      await api('/part-requests', { method: 'POST', body: JSON.stringify(Object.fromEntries(form.entries())) })
       await refresh()
+      setModal('')
+      say('Part request saved')
+    } catch (cause) {
+      setFormError(cause.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function completePartRequest(request) {
+    try {
+      await api(`/part-requests/${request.id}/complete`, { method: 'PUT' })
+      await refresh()
+      say('Part request marked completed')
+    } catch (cause) {
+      setError(cause.message)
+    }
+  }
+
+  async function receivePurchaseOrder(payload) {
+    setSaving(true)
+    setFormError('')
+    try {
+      await api(`/purchase-orders/${payload.orderId}/receive`, { method: 'POST', body: JSON.stringify(payload) })
+      await refresh()
+      setModal('')
       say('Purchase received and stock updated')
     } catch (cause) {
       setFormError(cause.message)
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -236,6 +279,10 @@ export default function App() {
       setFormError(cause.message)
     } finally {
       setSaving(false)
+    }
+
+    function viewSupplierInvoice(purchase) {
+      window.open(`/api/purchases/${purchase.id}/invoice`, '_blank', 'noopener,noreferrer')
     }
   }
 
@@ -306,7 +353,21 @@ export default function App() {
           <button className="only-mobile icon-button" onClick={() => setMenuOpen(true)} aria-label="Open menu"><Menu size={20} /></button>
           <label className="search"><Search size={16} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search invoices, parts, people..." /></label>
           <span className="top-business">MAHALAXMI AUTOMOBILES</span>
-          <button className="icon-button bell" aria-label="Notifications"><Bell size={18} /></button>
+          <button className="icon-button bell" aria-label={duePartRequestCount ? `${duePartRequestCount} part reminder${duePartRequestCount === 1 ? '' : 's'} due` : 'Notifications'} onClick={() => setNotificationsOpen((current) => !current)}>
+            <Bell size={18} />{duePartRequestCount > 0 && <span className="notification-dot" aria-hidden="true" />}
+          </button>
+          {notificationsOpen && <div className="notification-popover" role="status">
+            <div className="notification-heading"><b>Notifications</b><button className="icon-button" onClick={() => setNotificationsOpen(false)} aria-label="Close notifications"><X size={15} /></button></div>
+            {duePartRequests.length ? <div className="notification-list">
+              <b>Part reminders due</b>
+              {duePartRequests.map((request) => <div className="notification-item" key={request.id}><strong>{request.part_name}</strong><span>{request.quantity} needed{request.customer_name ? ` · ${request.customer_name}` : ''}</span></div>)}
+              <button className="btn btn-small" onClick={() => {
+                setNotificationsOpen(false)
+                go('Dashboard')
+                window.setTimeout(() => document.getElementById('customer-part-requests')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+              }}>View customer requests</button>
+            </div> : <p className="notification-empty">No reminders due.</p>}
+          </div>}
           <button className="me" type="button" onClick={logout} title="Log out"><span>{(authStatus.owner?.name || 'Owner').slice(0, 2).toUpperCase()}</span>{authStatus.owner?.name || 'Owner'}<LogOut size={15} /></button>
         </header>
 
@@ -327,13 +388,13 @@ export default function App() {
           {error && <div className="alert error" role="alert">{error}<button type="button" onClick={() => refresh(true)}>Retry</button></div>}
           {loading ? <div className="loading">Loading your business records…</div> : (
             <>
-              {active === 'Dashboard' && <Dashboard overview={data.overview} onOpenInvoice={openInvoice} onGo={go} />}
+              {active === 'Dashboard' && <Dashboard overview={data.overview} partRequests={data.partRequests} onOpenInvoice={openInvoice} onGo={go} onAddRequest={() => { setFormError(''); setModal('part-request') }} onCompleteRequest={completePartRequest} />}
               {(active === 'Sales' || active === 'Invoices') && <Invoices invoices={filtered(data.invoices, ['invoice_number', 'customer_name', 'status'])} onOpen={openInvoice} onPay={setPaymentTarget} />}
               {(active === 'Parts' || active === 'Inventory') && <Parts products={filtered(data.products, ['name', 'sku', 'hsn', 'category'])} onAdd={() => openModal('part')} onEdit={(item) => editRecord('part', item)} onRestock={setStockTarget} />}
               {active === 'Customers' && <Parties title="Customers" items={filtered(data.customers, ['name', 'phone', 'gstin', 'address'])} onAdd={() => openModal('customer')} onEdit={(item) => editRecord('customer', item)} />}
               {active === 'Suppliers' && <Parties title="Suppliers" items={filtered(data.suppliers, ['name', 'phone', 'gstin', 'address'])} onAdd={() => openModal('supplier')} onEdit={(item) => editRecord('supplier', item)} />}
-              {active === 'Purchase Orders' && <PurchaseOrders items={filtered(data.purchaseOrders, ['order_number', 'supplier_name', 'status'])} onCreate={() => openModal('purchase-order')} onView={(item) => openBusinessDocument('purchase-order', item.id)} onReceive={receivePurchaseOrder} />}
-              {active === 'Purchases' && <Purchases items={filtered(data.purchases, ['purchase_number', 'supplier_name', 'status'])} onPay={setPaymentTarget} />}
+              {active === 'Purchase Orders' && <PurchaseOrders items={filtered(data.purchaseOrders, ['order_number', 'supplier_name', 'status'])} onCreate={() => openModal('purchase-order')} onView={(item) => openBusinessDocument('purchase-order', item.id)} onReceive={(item) => { setRecordTarget(item); setFormError(''); setModal('receive-purchase') }} />}
+              {active === 'Purchases' && <Purchases items={filtered(data.purchases, ['purchase_number', 'supplier_name', 'status'])} onPay={setPaymentTarget} onGo={go} onViewInvoice={viewSupplierInvoice} />}
               {active === 'Quotations' && <Quotations items={filtered(data.quotations, ['quotation_number', 'customer_name', 'status'])} onCreate={() => openModal('quotation')} onView={(item) => openBusinessDocument('quotation', item.id)} onConvert={convertQuotation} />}
               {active === 'Payments & Dues' && <PaymentsDues dues={data.dues} onGo={go} />}
               {active === 'Reports' && <Reports overview={data.overview} invoices={data.invoices} purchases={data.purchases} suppliers={data.suppliers} onGo={go} />}
@@ -357,6 +418,18 @@ export default function App() {
         saving={saving}
         error={formError}
       />}
+      {modal === 'receive-purchase' && <ReceivePurchaseForm order={recordTarget} onClose={() => setModal('')} onSubmit={receivePurchaseOrder} saving={saving} error={formError} />}
+      {modal === 'part-request' && <Modal title="Remember unavailable part" onClose={() => setModal('')}>
+        <form className="form-grid" onSubmit={createPartRequest}>
+          <p className="form-hint">Record a customer request when the part is unavailable. Use it later to create a purchase order.</p>
+          <div className="two"><label>Customer name<input name="customer_name" maxLength="200" /></label><label>Part name<input name="part_name" required maxLength="200" autoFocus /></label></div>
+          <div className="two"><label>Vehicle number<input name="vehicle_number" placeholder="MH-51-C-2197" maxLength="40" /></label><label>Vehicle model<input name="vehicle_model" placeholder="Honda Activa 6G" maxLength="120" /></label></div>
+          <div className="two"><label>Quantity needed<input name="quantity" type="number" min="0.01" step="0.01" defaultValue="1" required /></label><label>Remind me on<input name="reminder_date" type="date" /></label></div>
+          <label>Notes<textarea name="notes" rows="2" maxLength="500" placeholder="Customer asked for this part; call when available" /></label>
+          {formError && <div className="alert error" role="alert">{formError}</div>}
+          <div className="foot"><button type="button" className="btn" onClick={() => setModal('')}>Cancel</button><button className="btn solid" disabled={saving}><Check size={16} />{saving ? 'Saving…' : 'Remember request'}</button></div>
+        </form>
+      </Modal>}
       {paymentTarget && <Modal title={`Record payment · ${paymentTarget.invoice_number || paymentTarget.purchase_number}`} onClose={() => setPaymentTarget(null)}>
         <form className="form-grid" onSubmit={paymentTarget.purchase_number ? recordSupplierPayment : recordPayment}>
           <p className="form-hint">Balance due: <b>{money(paymentTarget.total - paymentTarget.paid_amount)}</b></p>
@@ -369,7 +442,7 @@ export default function App() {
       {stockTarget && <Modal title={`Receive stock · ${stockTarget.name}`} onClose={() => setStockTarget(null)}>
         <form className="form-grid" onSubmit={receiveStock}>
           <p className="form-hint">Current stock: <b>{stockTarget.stock} {stockTarget.unit}</b></p>
-          <label>Quantity received<input name="quantity" type="number" min="0.01" step="0.01" required autoFocus /></label>
+          <label>Quantity received<input name="quantity" type="number" min="0.01" step={/^(pcs?|pieces?|units?)$/i.test(stockTarget.unit) ? '1' : '0.01'} required autoFocus /></label>
           <label>Updated cost price (₹)<input name="unit_cost" type="number" min="0" step="0.01" placeholder={Number(stockTarget.purchase_price).toFixed(2)} /></label>
           {formError && <div className="alert error" role="alert">{formError}</div>}
           <div className="foot"><button type="button" className="btn" onClick={() => setStockTarget(null)}>Cancel</button><button className="btn solid" disabled={saving}><Check size={16} />{saving ? 'Saving…' : 'Receive stock'}</button></div>
@@ -403,6 +476,7 @@ export default function App() {
         <PurchaseDocument document={businessDocumentView.document} kind={businessDocumentView.kind} />
       </Modal>}
       {toast && <div className="toast" role="status"><Check size={16} />{toast}</div>}
+      <Chatbot />
     </div>
   )
 }

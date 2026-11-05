@@ -141,11 +141,11 @@ export function registerAuthRoutes(app, db) {
       const smtpPassword = process.env.SMTP_PASS
       const from = process.env.SMTP_FROM || smtpUser
       const recipient = db.prepare('SELECT email FROM shop WHERE id = 1').get()?.email?.trim()
-      if (!smtpHost || !smtpUser || !smtpPassword || !from || !recipient || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535) {
-        return res.status(503).json({ error: 'Password recovery email is not configured. Ask your administrator to set up email delivery.' })
-      }
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+      if (!recipient || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
         return res.status(503).json({ error: 'Add a valid owner recovery email in Settings before requesting a password reset.' })
+      }
+      if (!smtpHost || !smtpUser || !smtpPassword || !from || !Number.isInteger(smtpPort) || smtpPort < 1 || smtpPort > 65535) {
+        return res.status(503).json({ error: 'Password recovery email delivery is not configured on this server. Ask your administrator to configure SMTP email delivery.' })
       }
 
       const code = randomBytes(24).toString('hex')
