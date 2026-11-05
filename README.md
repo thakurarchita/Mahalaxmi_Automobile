@@ -31,6 +31,8 @@ The hosted database starts separately from the SQLite file on your computer. If 
 
 `railway.json` configures the Node.js build, production start command and health check. Railway does not configure the SQLite volume in this file; create one in the Railway service settings so business data survives redeploys and service restarts.
 
+The Railway build uses `npm install` instead of a second `npm ci` pass. This avoids an `EBUSY` failure when Railway's cached `node_modules/.vite` directory is still in use during dependency cleanup. If a deployment created before this setting continues to fail with that error, choose **Redeploy** with **Clear build cache** enabled once.
+
 1. Push this project to GitHub, then in Railway choose **New Project → Deploy from GitHub Repo** and select the repository. If Railway asks for a service root directory, use `.` (the repository root containing `package.json`).
 2. In the service's **Variables**, set `HOST=0.0.0.0` and `DATABASE_PATH=/data/mahalaxmi-automobiles.sqlite`.
 3. In the service's **Volumes**, create and attach a persistent volume mounted at `/data`. Do not deploy with the database path on the temporary filesystem.
