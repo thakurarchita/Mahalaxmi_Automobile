@@ -37,8 +37,8 @@ const positiveOrZero = (value, label, { allowZero = true, max = 1_000_000_000 } 
 
 const quantityForUnit = (value, label, unit = 'pcs') => {
   const quantity = positiveOrZero(value, label, { allowZero: false })
-  if (/^(pcs?|pieces?|units?)$/i.test(String(unit).trim()) && !Number.isInteger(quantity)) {
-    throw new HttpError(400, `${label} must be a whole number for ${unit}.`)
+  if (!Number.isInteger(quantity)) {
+    throw new HttpError(400, `${label} must be a whole number.`)
   }
   return quantity
 }
@@ -65,6 +65,14 @@ function listRows(sql, ...params) {
   return db.prepare(sql).all(...params)
 }
 
+const isIntraState = (place) => {
+  const normalized = String(place || '').trim().toLowerCase().replace(/[.,]/g, '')
+  return normalized === '27'
+    || normalized === 'mh'
+    || normalized === 'maharashtra'
+    || normalized.includes('maharashtra')
+}
+
 function invoiceDetails(id) {
   const invoice = db.prepare(`
     SELECT i.*, s.name AS shop_name, s.address AS shop_address, s.phone AS shop_phone,
@@ -75,6 +83,15 @@ function invoiceDetails(id) {
   `).get(id)
   if (!invoice) throw new HttpError(404, 'Invoice not found.')
   invoice.items = listRows('SELECT * FROM invoice_items WHERE invoice_id = ? ORDER BY id', id)
+  if (isIntraState(invoice.place_of_supply) && invoice.igst > 0 && invoice.cgst === 0 && invoice.sgst === 0) {
+    invoice.cgst = round(invoice.igst / 2)
+    invoice.sgst = round(invoice.igst - invoice.cgst)
+    invoice.igst = 0
+    invoice.items = invoice.items.map((item) => {
+      const cgst = round(item.igst / 2)
+      return { ...item, cgst, sgst: round(item.igst - cgst), igst: 0 }
+    })
+  }
   return invoice
 }
 
@@ -118,7 +135,7 @@ app.post('/api/chat', (req, res) => {
 })
 app.post('/api/part-requests', (req, res) => {
   const partName = requiredText(req.body.part_name, 'Part name')
-  const quantity = positiveOrZero(req.body.quantity || 1, 'Quantity', { allowZero: false })
+  const quantity = quantityForUnit(req.body.quantity || 1, 'Quantity')
   const reminderDate = req.body.reminder_date ? validDate(req.body.reminder_date, 'Reminder date') : ''
   const result = db.prepare(`
     INSERT INTO part_requests (customer_name, vehicle_number, vehicle_model, part_name, quantity, notes, reminder_date)
@@ -370,7 +387,7 @@ app.post('/api/invoices', (req, res) => {
     throw new HttpError(400, 'Add between 1 and 100 invoice items.')
   }
   if (dueDate && dueDate < invoiceDate) throw new HttpError(400, 'Due date cannot be before the invoice date.')
-  const intraState = place.trim() === '27' || place.toLowerCase().includes('maharashtra')
+  const intraState = isIntraState(place)
   const lines = itemsInput.map((item) => {
     const productId = positiveOrZero(item.product_id, 'Part', { allowZero: false })
     const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId)
@@ -400,7 +417,7 @@ app.post('/api/invoices', (req, res) => {
         customer_email, customer_address, customer_gstin, invoice_date, due_date, dispatched_through,
         vehicle_number, vehicle_model, engine_number, place_of_supply, notes,
         taxable_amount, cgst, sgst, igst, total)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(invoiceNumber, customerId, customer.name, customer.phone, customer.email,
       customer.address, customer.gstin, invoiceDate, dueDate,
       optionalText(req.body.dispatched_through, 100), optionalText(req.body.vehicle_number, 40).toUpperCase(),
@@ -446,8 +463,6 @@ app.post('/api/invoices/:id/payments', (req, res) => {
   pay()
   res.json(invoiceDetails(invoiceId))
 })
-
-const isIntraState = (place) => place.trim() === '27' || place.toLowerCase().includes('maharashtra')
 
 function documentTotals(lines, place) {
   const intraState = isIntraState(place)

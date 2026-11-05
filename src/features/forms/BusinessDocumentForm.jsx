@@ -190,7 +190,7 @@ export default function BusinessDocumentForm({ kind, customers, suppliers, produ
                 {isPurchaseOrder && <input name={`new_unit_${index}`} defaultValue="pcs" placeholder="Unit" />}
               </div> : product && <small>HSN {product.hsn || '—'} · {product.stock} {product.unit} in stock · Usual supplier: {product.supplier_name || 'Not set'}</small>}
             </label>
-            <label>Qty<input type="number" min={isPurchaseOrder || (product && /^(pcs?|pieces?|units?)$/i.test(product.unit)) ? '1' : '0.01'} step={isPurchaseOrder || (product && /^(pcs?|pieces?|units?)$/i.test(product.unit)) ? '1' : '0.01'} required value={line.quantity} onChange={(event) => updateLine(index, 'quantity', event.target.value)} /></label>
+            <label>Qty<input type="number" min="1" step="1" required value={line.quantity} onChange={(event) => updateLine(index, 'quantity', event.target.value)} /></label>
             <label>{valueLabel} ₹<input type="number" min="0" step="0.01" required value={line.unit_value} onChange={(event) => updateLine(index, 'unit_value', event.target.value)} /></label>
             <div className="line-amount"><small>Before GST</small><b>{money(roundMoney(Number(line.quantity || 0) * Number(line.unit_value || 0)))}</b></div>
             {lines.length > 1 && <button className="icon-button remove-line" type="button" onClick={() => setLines((current) => current.filter((_, lineIndex) => lineIndex !== index))} aria-label="Remove line"><X size={17} /></button>}

@@ -68,6 +68,7 @@ export default function AuthScreen({ configured, onAuthenticated }) {
           </svg>
           <div><b>Mahalaxmi Automobiles</b><span>Owner business desk</span></div>
         </div>
+        <p className="auth-kicker">SECURE BUSINESS ACCESS</p>
         <div className="auth-icon">{mode === 'login' ? <LockKeyhole /> : mode === 'forgot' || mode === 'reset' ? <KeyRound /> : <ShieldCheck />}</div>
         <h1>{title}</h1>
         <p className="auth-subtitle">{subtitle}</p>

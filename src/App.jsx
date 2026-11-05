@@ -280,10 +280,10 @@ export default function App() {
     } finally {
       setSaving(false)
     }
+  }
 
-    function viewSupplierInvoice(purchase) {
-      window.open(`/api/purchases/${purchase.id}/invoice`, '_blank', 'noopener,noreferrer')
-    }
+  function viewSupplierInvoice(purchase) {
+    window.open(`/api/purchases/${purchase.id}/invoice`, '_blank', 'noopener,noreferrer')
   }
 
   async function createQuotation(payload) {
@@ -424,7 +424,7 @@ export default function App() {
           <p className="form-hint">Record a customer request when the part is unavailable. Use it later to create a purchase order.</p>
           <div className="two"><label>Customer name<input name="customer_name" maxLength="200" /></label><label>Part name<input name="part_name" required maxLength="200" autoFocus /></label></div>
           <div className="two"><label>Vehicle number<input name="vehicle_number" placeholder="MH-51-C-2197" maxLength="40" /></label><label>Vehicle model<input name="vehicle_model" placeholder="Honda Activa 6G" maxLength="120" /></label></div>
-          <div className="two"><label>Quantity needed<input name="quantity" type="number" min="0.01" step="0.01" defaultValue="1" required /></label><label>Remind me on<input name="reminder_date" type="date" /></label></div>
+          <div className="two"><label>Quantity needed<input name="quantity" type="number" min="1" step="1" defaultValue="1" required /></label><label>Remind me on<input name="reminder_date" type="date" /></label></div>
           <label>Notes<textarea name="notes" rows="2" maxLength="500" placeholder="Customer asked for this part; call when available" /></label>
           {formError && <div className="alert error" role="alert">{formError}</div>}
           <div className="foot"><button type="button" className="btn" onClick={() => setModal('')}>Cancel</button><button className="btn solid" disabled={saving}><Check size={16} />{saving ? 'Saving…' : 'Remember request'}</button></div>
@@ -442,7 +442,7 @@ export default function App() {
       {stockTarget && <Modal title={`Receive stock · ${stockTarget.name}`} onClose={() => setStockTarget(null)}>
         <form className="form-grid" onSubmit={receiveStock}>
           <p className="form-hint">Current stock: <b>{stockTarget.stock} {stockTarget.unit}</b></p>
-          <label>Quantity received<input name="quantity" type="number" min="0.01" step={/^(pcs?|pieces?|units?)$/i.test(stockTarget.unit) ? '1' : '0.01'} required autoFocus /></label>
+          <label>Quantity received<input name="quantity" type="number" min="1" step="1" required autoFocus /></label>
           <label>Updated cost price (₹)<input name="unit_cost" type="number" min="0" step="0.01" placeholder={Number(stockTarget.purchase_price).toFixed(2)} /></label>
           {formError && <div className="alert error" role="alert">{formError}</div>}
           <div className="foot"><button type="button" className="btn" onClick={() => setStockTarget(null)}>Cancel</button><button className="btn solid" disabled={saving}><Check size={16} />{saving ? 'Saving…' : 'Receive stock'}</button></div>

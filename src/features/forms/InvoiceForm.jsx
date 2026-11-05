@@ -70,7 +70,7 @@ export default function InvoiceForm({ customers, products, onClose, onSubmit, sa
           return <div className="invoice-line" key={index}>
             <label className="line-product">Part<select required value={line.product_id} onChange={(event) => selectProduct(index, event.target.value)}><option value="">Select part</option>{products.filter((item) => Number(item.stock) > 0).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.vehicle_make} {item.vehicle_model} · {item.sku} ({item.stock} {item.unit})</option>)}</select>
               {product && <small>{product.vehicle_make} · {product.vehicle_model} · HSN {product.hsn || '—'} · GST {product.gst_rate}% · {product.stock} available</small>}</label>
-            <label>Qty<input type="number" min="0.01" step={product && /^(pcs?|pieces?|units?)$/i.test(product.unit) ? '1' : '0.01'} max={product?.stock || undefined} required value={line.quantity} onChange={(event) => updateLine(index, 'quantity', event.target.value)} /></label>
+            <label>Qty<input type="number" min="1" step="1" max={product?.stock || undefined} required value={line.quantity} onChange={(event) => updateLine(index, 'quantity', event.target.value)} /></label>
             <label>Cost ₹<input type="number" value={product ? Number(product.purchase_price).toFixed(2) : ''} placeholder="—" readOnly /></label>
             <label>Price ₹<input type="number" min="0" step="0.01" required value={line.unit_price} onChange={(event) => updateLine(index, 'unit_price', event.target.value)} /></label>
             <div className="line-amount"><small>Amount before GST</small><b>{money(roundMoney(Number(line.quantity || 0) * Number(line.unit_price || 0)))}</b></div>

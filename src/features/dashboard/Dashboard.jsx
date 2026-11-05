@@ -41,7 +41,7 @@ export default function Dashboard({ overview = {}, partRequests = [], onOpenInvo
   ]
   return (
     <>
-      <div className="stat-grid">{stats.map((stat) => <section className="panel stat-card" key={stat.label}><div className="stat-icon"><stat.icon size={17} /></div><span className="label">{stat.label}</span><b className={stat.negative ? 'negative' : ''}>{stat.value}</b><small>{stat.note}</small></section>)}</div>
+      <div className="stat-grid">{stats.map((stat) => <section className={`panel stat-card ${stat.label === 'Sales (taxable)' ? 'sales-card' : ''}`} key={stat.label}><div className="stat-icon"><stat.icon size={17} /></div><span className="label">{stat.label}</span><b className={stat.negative ? 'negative' : ''}>{stat.value}</b><small>{stat.note}</small></section>)}</div>
       <div className="dashboard-grid">
         <section className="panel"><div className="section-heading"><div><h2>Sales &amp; cost of parts</h2><p>Invoice taxable values compared with cost price</p></div><span className="period-pill">Last 6 months</span></div>
           <Chart monthly={overview.monthly} /><div className="legend"><span><i className="legend-sales" />Sales</span><span><i className="legend-cost" />Cost of parts</span></div>
@@ -78,7 +78,6 @@ export default function Dashboard({ overview = {}, partRequests = [], onOpenInvo
             <td>{Number(part.suggested_order) > 0 ? `${part.suggested_order} ${part.unit}` : '—'}</td>
             <td><span className={part.forecast_status === 'Reorder soon' || part.forecast_status === 'At reorder level' ? 'stock-low' : 'stock-ok'}>{part.forecast_status}</span></td>
           </tr>)}</tbody></table></div> : <div className="highlight-empty">Add parts to start tracking inventory and demand.</div>}
-        {Number(overview.demo_part_count) > 0 && <p className="demo-notice" role="note">Sample inventory is loaded for setup and testing ({overview.demo_part_count} parts; SKUs start with DEMO-). Verify or replace sample stock and fitment before selling.</p>}
       </section>
       <section className="panel forecast-panel">
         <div className="section-heading">
